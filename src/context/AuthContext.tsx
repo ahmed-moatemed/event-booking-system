@@ -35,18 +35,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     checkUser();
 
-    const { data } = supabase.auth.onAuthStateChange(async (events, session) => {
-      setUser(session?.user ?? null);
+    const { data } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        setUser(session?.user ?? null);
 
-      if (session?.user) {
-        const role = await getUserRole();
-        setIsAdmin(role === "admin");
-      } else {
-        setIsAdmin(false);
+        if (session?.user) {
+          const role = await getUserRole();
+          setIsAdmin(role === "admin");
+        } else {
+          setIsAdmin(false);
+        }
+
+        setIsLoading(false);
       }
-
-      setIsLoading(false);
-    });
+    );
 
     return () => {
       data.subscription.unsubscribe();
