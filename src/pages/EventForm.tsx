@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase/supabaseClient";
+import { useAuth } from "../context/AuthContext";
 import type { Event } from "../types/event";
 import "../styles/eventForm.css";
 
@@ -8,6 +9,7 @@ const EventForm = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isEditMode = id !== "new";
+  const { isAdmin, isLoading: authLoading } = useAuth();
 
   const [formData, setFormData] = useState<Omit<Event, "id" | "created_at">>({
     name: "",
@@ -23,18 +25,28 @@ const EventForm = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [imagePreview, setImagePreview] = useState("");
 
   useEffect(() => {
-    if (isEditMode) {
+    if (isEditMode && !authLoading) {
       fetchEvent();
     }
-  }, [id]);
+  }, [id, authLoading]);
+
+  // Check if user is admin, else redirect
+  useEffect(() => {
+    if (!authLoading && !isAdmin) {
+      navigate("/");
+    }
+  }, [authLoading, isAdmin, navigate]);
 
   const fetchEvent = async () => {
     if (!id) return;
 
     setLoading(true);
+    setError("");
+
     try {
       const { data, error } = await supabase
         .from("events")
@@ -52,13 +64,13 @@ const EventForm = () => {
           date: new Date(data.date).toISOString().split("T")[0],
           venue: data.venue,
           price: data.price,
-          image_url: data.image_url,
+          image_url: data.image_url || "",
         });
-        setImagePreview(data.image_url);
+        setImagePreview(data.image_url || "");
       }
     } catch (error) {
       console.error("Error fetching event:", error);
-      setError("Failed to load event details");
+      setError("Failed to load event details. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -72,7 +84,7 @@ const EventForm = () => {
     const { name, value } = e.target;
     setFormData((prev) => ({
       ...prev,
-      [name]: name === "price" ? parseFloat(value) : value,
+      [name]: name === "price" ? parseFloat(value) || 0 : value,
     }));
   };
 
@@ -91,29 +103,94 @@ const EventForm = () => {
   };
 
   const uploadImage = async (): Promise<string> => {
-    if (!selectedFile) return formData.image_url;
+    if (!selectedFile) return formData.image_url || "";
 
     setIsUploading(true);
     try {
       const fileExt = selectedFile.name.split(".").pop();
       const fileName = `${Date.now()}.${fileExt}`;
-      const filePath = `events/${fileName}`;
+      // Simplify the path - don't use subfolders
+      const filePath = fileName;
 
-      const { error: uploadError } = await supabase.storage
-        .from("event-images")
-        .upload(filePath, selectedFile);
+      // Check if file size is acceptable (less than 2MB)
+      if (selectedFile.size > 2 * 1024 * 1024) {
+        throw new Error(
+          "Image file is too large. Please use an image smaller than 2MB."
+        );
+      }
 
-      if (uploadError) throw uploadError;
+      // Use the default bucket
+      const bucketName = "event-images";
 
-      // Get the public URL for the uploaded image
-      const { data } = supabase.storage
-        .from("event-images")
-        .getPublicUrl(filePath);
+      try {
+        // Try to upload to the bucket with more detailed error handling
+        const { data, error: uploadError } = await supabase.storage
+          .from(bucketName)
+          .upload(filePath, selectedFile, {
+            cacheControl: "3600",
+            upsert: true,
+          });
 
-      return data.publicUrl;
+        if (uploadError) {
+          console.error("Upload error details:", uploadError);
+
+          if (
+            uploadError.message.includes("bucket") ||
+            uploadError.message.includes("not found")
+          ) {
+            throw new Error(
+              `Storage bucket '${bucketName}' not found. Please create it in your Supabase dashboard.`
+            );
+          }
+
+          if (
+            uploadError.message.includes("permission") ||
+            uploadError.message.includes("not authorized")
+          ) {
+            throw new Error(
+              `Permission denied. Check your storage bucket policies to ensure uploads are allowed.`
+            );
+          }
+
+          if (
+            uploadError.message.includes("413") ||
+            uploadError.message.includes("too large")
+          ) {
+            throw new Error(
+              `File too large. Please use a smaller image (under 2MB).`
+            );
+          }
+
+          throw new Error(`Upload failed: ${uploadError.message}`);
+        }
+
+        // Get the public URL for the uploaded image
+        const { data: urlData } = supabase.storage
+          .from(bucketName)
+          .getPublicUrl(filePath);
+        return urlData.publicUrl;
+      } catch (error) {
+        console.error("Upload error:", error);
+        if (error instanceof Error) {
+          if (
+            error.message.includes("bucket") ||
+            error.message.includes("not found")
+          ) {
+            throw new Error(
+              `Storage bucket '${bucketName}' doesn't exist. Please go to your Supabase dashboard, navigate to Storage, and create a bucket named '${bucketName}' with public access enabled.`
+            );
+          }
+          throw error;
+        }
+        throw new Error("Failed to upload image. Please try again.");
+      }
     } catch (error) {
       console.error("Error uploading image:", error);
-      throw new Error("Failed to upload image");
+      if (error instanceof Error) {
+        throw new Error(error.message);
+      } else {
+        throw new Error("Failed to upload image. Please try again.");
+      }
     } finally {
       setIsUploading(false);
     }
@@ -122,6 +199,7 @@ const EventForm = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setSaving(true);
 
     try {
       // Validate form data
@@ -132,14 +210,25 @@ const EventForm = () => {
         formData.price < 0
       ) {
         setError("Please fill in all required fields");
+        setSaving(false);
         return;
       }
 
-      let imageUrl = formData.image_url;
+      let imageUrl = formData.image_url || "";
 
       // Upload image if a new file is selected
       if (selectedFile) {
-        imageUrl = await uploadImage();
+        try {
+          imageUrl = await uploadImage();
+        } catch (error) {
+          if (error instanceof Error) {
+            setError(error.message);
+          } else {
+            setError("Image upload failed. Please try again.");
+          }
+          setSaving(false);
+          return;
+        }
       }
 
       // Prepare the data to save
@@ -167,9 +256,19 @@ const EventForm = () => {
       navigate("/admin");
     } catch (error) {
       console.error("Error saving event:", error);
-      setError("Failed to save event");
+      setError("Failed to save event. Please check your input and try again.");
+    } finally {
+      setSaving(false);
     }
   };
+
+  if (authLoading) {
+    return <div className="loading-container">Checking permissions...</div>;
+  }
+
+  if (!isAdmin) {
+    return null; // Will redirect in useEffect
+  }
 
   if (loading) {
     return <div className="loading-container">Loading event details...</div>;
@@ -193,6 +292,7 @@ const EventForm = () => {
             value={formData.name}
             onChange={handleChange}
             required
+            disabled={saving}
           />
         </div>
 
@@ -205,6 +305,7 @@ const EventForm = () => {
             onChange={handleChange}
             rows={5}
             required
+            disabled={saving}
           ></textarea>
         </div>
 
@@ -218,6 +319,7 @@ const EventForm = () => {
               value={formData.category}
               onChange={handleChange}
               required
+              disabled={saving}
             />
           </div>
 
@@ -230,6 +332,7 @@ const EventForm = () => {
               value={formData.date}
               onChange={handleChange}
               required
+              disabled={saving}
             />
           </div>
         </div>
@@ -244,6 +347,7 @@ const EventForm = () => {
               value={formData.venue}
               onChange={handleChange}
               required
+              disabled={saving}
             />
           </div>
 
@@ -253,11 +357,12 @@ const EventForm = () => {
               type="number"
               id="price"
               name="price"
-              min="0"
-              step="0.01"
               value={formData.price}
               onChange={handleChange}
+              step="0.01"
+              min="0"
               required
+              disabled={saving}
             />
           </div>
         </div>
@@ -269,11 +374,11 @@ const EventForm = () => {
             id="image"
             accept="image/*"
             onChange={handleFileChange}
+            disabled={saving || isUploading}
           />
-
           {imagePreview && (
             <div className="image-preview">
-              <img src={imagePreview} alt="Preview" />
+              <img src={imagePreview} alt="Event preview" />
             </div>
           )}
         </div>
@@ -283,15 +388,16 @@ const EventForm = () => {
             type="button"
             onClick={() => navigate("/admin")}
             className="cancel-button"
+            disabled={saving || isUploading}
           >
             Cancel
           </button>
-          <button type="submit" className="save-button" disabled={isUploading}>
-            {isUploading
-              ? "Uploading..."
-              : isEditMode
-              ? "Update Event"
-              : "Create Event"}
+          <button
+            type="submit"
+            className="save-button"
+            disabled={saving || isUploading}
+          >
+            {saving || isUploading ? "Saving..." : "Save Event"}
           </button>
         </div>
       </form>

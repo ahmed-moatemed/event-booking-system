@@ -1,35 +1,65 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase/supabaseClient";
+import { useAuth } from "../context/AuthContext";
 import type { Event } from "../types/event";
 import "../styles/adminDashboard.css";
 
 const AdminDashboard = () => {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [deleteInProgress, setDeleteInProgress] = useState<string | null>(null);
+  const { isAdmin, isLoading: authLoading, user } = useAuth();
+  const navigate = useNavigate();
+
+  // Check auth status on component mount
+  useEffect(() => {
+    if (!authLoading && !isAdmin && !user) {
+      navigate("/login");
+    } else if (!authLoading && !isAdmin && user) {
+      navigate("/");
+    }
+  }, [authLoading, isAdmin, navigate, user]);
 
   useEffect(() => {
+    let mounted = true;
+
+    const fetchEvents = async () => {
+      if (authLoading || !isAdmin) return;
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const { data, error } = await supabase
+          .from("events")
+          .select("*")
+          .order("date", { ascending: true });
+
+        if (error) throw error;
+
+        if (mounted) {
+          setEvents(data || []);
+        }
+      } catch (error) {
+        console.error("Error fetching events:", error);
+        if (mounted) {
+          setError("Failed to load events. Please try again later.");
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
     fetchEvents();
-  }, []);
 
-  const fetchEvents = async () => {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from("events")
-        .select("*")
-        .order("date", { ascending: true });
-
-      if (error) throw error;
-      setEvents(data || []);
-    } catch (error) {
-      console.error("Error fetching events:", error);
-      setError("Failed to load events");
-    } finally {
-      setLoading(false);
-    }
-  };
+    return () => {
+      mounted = false;
+    };
+  }, [authLoading, isAdmin]);
 
   const deleteEvent = async (id: string) => {
     if (!window.confirm("Are you sure you want to delete this event?")) {
@@ -37,6 +67,9 @@ const AdminDashboard = () => {
     }
 
     try {
+      setError(null);
+      setDeleteInProgress(id);
+
       // First delete all bookings for this event
       const { error: bookingsError } = await supabase
         .from("bookings")
@@ -54,10 +87,20 @@ const AdminDashboard = () => {
       setEvents(events.filter((event) => event.id !== id));
     } catch (error) {
       console.error("Error deleting event:", error);
-      setError("Failed to delete event");
+      setError("Failed to delete event. Please try again.");
+    } finally {
+      setDeleteInProgress(null);
     }
   };
 
+  // Render loading state
+  if (authLoading) {
+    return <div className="loading-container">Checking permissions...</div>;
+  }
+
+  // If not admin and auth is complete, component will redirect
+
+  // Render loading state for events
   if (loading) {
     return <div className="loading-container">Loading events...</div>;
   }
@@ -111,8 +154,12 @@ const AdminDashboard = () => {
                       <button
                         onClick={() => deleteEvent(event.id)}
                         className="delete-button"
+                        type="button"
+                        disabled={deleteInProgress === event.id}
                       >
-                        Delete
+                        {deleteInProgress === event.id
+                          ? "Deleting..."
+                          : "Delete"}
                       </button>
                     </td>
                   </tr>

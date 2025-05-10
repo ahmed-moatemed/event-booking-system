@@ -21,22 +21,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
+
     const checkUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      setUser(data.user);
+      try {
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
 
-      if (data.user) {
-        const role = await getUserRole();
-        setIsAdmin(role === "admin");
+        if (error) {
+          console.error("Error getting session:", error);
+          return;
+        }
+
+        if (mounted) {
+          setUser(session?.user ?? null);
+
+          if (session?.user) {
+            const role = await getUserRole();
+            setIsAdmin(role === "admin");
+          }
+        }
+      } catch (error) {
+        console.error("Error checking auth state:", error);
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
-
-      setIsLoading(false);
     };
 
     checkUser();
 
-    const { data } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (mounted) {
         setUser(session?.user ?? null);
 
         if (session?.user) {
@@ -48,33 +69,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
         setIsLoading(false);
       }
-    );
+    });
 
     return () => {
-      data.subscription.unsubscribe();
+      mounted = false;
+      subscription.unsubscribe();
     };
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    await supabase.auth.signInWithPassword({ email, password });
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+    } catch (error) {
+      console.error("Error signing in:", error);
+      throw error;
+    }
   };
 
   const signUp = async (email: string, password: string) => {
-    await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          role: "user",
+    try {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            role: "user",
+          },
         },
-      },
-    });
+      });
+      if (error) throw error;
+    } catch (error) {
+      console.error("Error signing up:", error);
+      throw error;
+    }
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
-    setIsAdmin(false);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      setUser(null);
+      setIsAdmin(false);
+    } catch (error) {
+      console.error("Error signing out:", error);
+      throw error;
+    }
   };
 
   return (

@@ -11,52 +11,78 @@ const Home = () => {
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchEvents = async () => {
       setLoading(true);
+      setError(null);
+
       try {
+        // Fetch events first
         let query = supabase.from("events").select("*");
 
-        // Apply category filter if selected
         if (selectedCategory) {
           query = query.eq("category", selectedCategory);
         }
 
-        const { data, error } = await query.order("date", { ascending: true });
+        const { data: eventsData, error: eventsError } = await query.order(
+          "date",
+          { ascending: true }
+        );
 
-        if (error) throw error;
+        if (eventsError) throw eventsError;
 
-        // Set events
-        setEvents(data || []);
+        if (mounted) {
+          setEvents(eventsData || []);
 
-        // Extract unique categories for filter
-        if (!selectedCategory) {
-          const uniqueCategories = Array.from(
-            new Set(data?.map((event) => event.category) || [])
-          );
-          setCategories(uniqueCategories);
+          // Extract unique categories for filter
+          if (!selectedCategory) {
+            const uniqueCategories = Array.from(
+              new Set(eventsData?.map((event) => event.category) || [])
+            );
+            setCategories(uniqueCategories);
+          }
         }
 
-        // Fetch user bookings if logged in
+        // Fetch user bookings separately if logged in
         if (user) {
-          const { data: bookingsData, error: bookingsError } = await supabase
-            .from("bookings")
-            .select("*")
-            .eq("user_id", user.id);
+          try {
+            const { data: bookingsData, error: bookingsError } = await supabase
+              .from("bookings")
+              .select("*")
+              .eq("user_id", user.id);
 
-          if (bookingsError) throw bookingsError;
-          setBookings(bookingsData || []);
+            if (bookingsError) {
+              console.error("Error fetching bookings:", bookingsError);
+            } else if (mounted) {
+              setBookings(bookingsData || []);
+            }
+          } catch (bookingFetchError) {
+            console.error("Error in booking fetch:", bookingFetchError);
+            // Don't throw here, we still want to show events even if bookings fail
+          }
         }
       } catch (error) {
         console.error("Error fetching events:", error);
+        if (mounted) {
+          setError("Failed to load events. Please try again later.");
+        }
       } finally {
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     };
 
     fetchEvents();
+
+    return () => {
+      mounted = false;
+    };
   }, [selectedCategory, user]);
 
   const isBooked = (eventId: string) => {
@@ -69,6 +95,10 @@ const Home = () => {
 
   if (loading) {
     return <div className="loading-container">Loading events...</div>;
+  }
+
+  if (error) {
+    return <div className="error-container">{error}</div>;
   }
 
   return (
@@ -146,4 +176,3 @@ const Home = () => {
 };
 
 export default Home;
-
