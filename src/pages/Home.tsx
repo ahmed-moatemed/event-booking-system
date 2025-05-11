@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import type { Event, Booking } from "../types/event";
 import "../styles/home.css";
+import Eventt from '../image/eventt.jpg';
 
 const Home = () => {
   const [events, setEvents] = useState<Event[]>([]);
@@ -141,7 +142,7 @@ const Home = () => {
             <div key={event.id} className="event-card">
               <div className="event-image">
                 <img
-                  src={event.image_url || "https://via.placeholder.com/300x200"}
+                  src={event.image_url || Eventt}
                   alt={event.name}
                 />
               </div>

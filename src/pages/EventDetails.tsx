@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import type { Event } from "../types/event";
 import "../styles/eventDetails.css";
+import Eventt from '../image/eventt.jpg';
 
 const EventDetails = () => {
   const { id } = useParams<{ id: string }>();
@@ -92,7 +93,7 @@ const EventDetails = () => {
       <div className="event-details-content">
         <div className="event-details-image">
           <img
-            src={event.image_url || "https://via.placeholder.com/800x400"}
+            src={event.image_url || Eventt}
             alt={event.name}
           />
         </div>
