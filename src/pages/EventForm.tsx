@@ -124,7 +124,7 @@ const EventForm = () => {
 
       try {
         // Try to upload to the bucket with more detailed error handling
-        const { data, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from(bucketName)
           .upload(filePath, selectedFile, {
             cacheControl: "3600",
